@@ -1,0 +1,52 @@
+#include "/Engine/Private/Common.ush"
+#define debug 0
+StructuredBuffer<float4> VertexAttributeBuffer;
+Buffer<uint> IndexValueBuffer;
+int NumGS;
+struct FGSVertexOutput
+{
+	float4 Vertex : SV_POSITION;
+	float2 Pos : TEXCOORD0;
+	float4 Color : COLOR0;
+};
+
+FGSVertexOutput MainVS(
+	float4 InPosition : ATTRIBUTE0,
+	uint InstanceId : SV_InstanceID)
+{
+	FGSVertexOutput Output = (FGSVertexOutput)0;
+	uint idx = IndexValueBuffer[InstanceId];
+	float4 centerClipPos = VertexAttributeBuffer[idx * 3];
+	bool behindCam = centerClipPos.w <= 0;
+	
+	if (0)
+	{
+		Output.Vertex = asfloat(0x7fc00000);
+	}else
+	{
+		Output.Color = VertexAttributeBuffer[idx * 3 + 2];
+		float2 axis1 = VertexAttributeBuffer[idx * 3 + 1].xy;
+		float2 axis2 = VertexAttributeBuffer[idx * 3 + 1].zw;
+		float2 quadPos = InPosition.xy * 2.0;
+		Output.Pos = quadPos;
+
+		float2 deltaScreenPos = (quadPos.x * axis1 + quadPos.y * axis2) * 2 / View.ViewSizeAndInvSize.xy;
+
+		Output.Vertex = centerClipPos;
+		Output.Vertex.xy += deltaScreenPos * centerClipPos.w;
+	}
+	return Output;
+}
+
+float4 MainPS(FGSVertexOutput Input) : SV_Target0{
+	float power = -dot(Input.Pos,Input.Pos);
+	float alpha = exp(power);
+	alpha = saturate(alpha * Input.Color.w);
+	if (alpha < 1.0/255.0)
+		discard;
+	float4 res = float4(Input.Color.xyz * alpha,alpha);
+#if debug
+	res = float4(1.0,0.0,0.0,1.0);
+#endif
+	return res;
+}
