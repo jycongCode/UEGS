@@ -9,7 +9,7 @@ struct FUEGSRenderData final: public F_EGP_ViewPersistentData
 
 	// todo : add buffers needed for gpu sorting
 	TRefCountPtr<FRHIBuffer> PreprocessDataBuffer, VertexAttributeBuffer, DepthKeyBufferPing, IndexValueBufferPing, DepthKeyBufferPong,IndexValueBufferPong;
-
+	TRefCountPtr<FRDGPooledBuffer> PreprocessBufferPooled, VertexAttributeBufferPooled, DepthKeyBufferPingPooled, IndexValueBufferPingPooled, DepthKeyBufferPongPooled,IndexValueBufferPongPooled;
 	int NumGS = 0;
 	
 	FUEGSRenderData(FRDGBuilder&GraphBuilder,const FViewInfo& ViewInfo,const FIntRect& viewportSubset, UGSAsset* GSAssetData);

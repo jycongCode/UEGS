@@ -93,40 +93,17 @@ void F_UEGS_PassSVE::PrePostProcessPass_RenderThread(FRDGBuilder& GraphBuilder, 
 
 	// Preprocess Pass
 	auto PreprocessParams = GraphBuilder.AllocParameters<FGSPreprocessCS::FParameters>();
-	FRDGBufferDesc preprocessDesc = FRDGBufferDesc::CreateBufferDesc(sizeof(FVector4f), simData.NumGS * 19);
-	auto preprocessBufferPooled = new FRDGPooledBuffer(
-		simData.PreprocessDataBuffer,
-		preprocessDesc,
-		simData.NumGS * 19,
-		TEXT("Preprocess Buffer RDG"));
-	auto PreprocessBufferRDG = GraphBuilder.RegisterExternalBuffer(preprocessBufferPooled);
+	auto PreprocessBufferRDG = GraphBuilder.RegisterExternalBuffer(simData.PreprocessBufferPooled);
 	PreprocessParams->PreprocessBuffer = GraphBuilder.CreateSRV(PreprocessBufferRDG,PF_A32B32G32R32F);
 
-	FRDGBufferDesc vertexAttrDesc = FRDGBufferDesc::CreateBufferDesc(sizeof(FVector4f), simData.NumGS * 3);
-	auto vertexAttrPooled = new FRDGPooledBuffer(
-		simData.VertexAttributeBuffer,
-		vertexAttrDesc,
-		simData.NumGS * 3,
-		TEXT("Vertex Attr Buffer RDG"));
-	auto VertexAttributeRDG = GraphBuilder.RegisterExternalBuffer(vertexAttrPooled);
+	
+	auto VertexAttributeRDG = GraphBuilder.RegisterExternalBuffer(simData.VertexAttributeBufferPooled);
 	PreprocessParams->VertexAttributeBuffer = GraphBuilder.CreateUAV(VertexAttributeRDG,PF_A32B32G32R32F);
 	
-	FRDGBufferDesc depthKeyDesc = FRDGBufferDesc::CreateBufferDesc(sizeof(uint32), simData.NumGS);
-	auto depthKeyBufferPooled = new FRDGPooledBuffer(
-		simData.DepthKeyBufferPing,
-		depthKeyDesc,
-		simData.NumGS,
-		TEXT("Depth Key Buffer Ping RDG"));
-	auto depthKeyBufferPingRDG = GraphBuilder.RegisterExternalBuffer(depthKeyBufferPooled);
+	auto depthKeyBufferPingRDG = GraphBuilder.RegisterExternalBuffer(simData.DepthKeyBufferPingPooled);
 	PreprocessParams->DepthKeyBuffer = GraphBuilder.CreateUAV(depthKeyBufferPingRDG,PF_R32_UINT);
-
-	FRDGBufferDesc indexValueDesc = FRDGBufferDesc::CreateBufferDesc(sizeof(uint32), simData.NumGS);
-	auto indexValueBufferPooled = new FRDGPooledBuffer(
-		simData.IndexValueBufferPing,
-		indexValueDesc,
-		simData.NumGS,
-		TEXT("Index Value Buffer Ping RDG"));
-	auto IndexValuePingRDG = GraphBuilder.RegisterExternalBuffer(indexValueBufferPooled);
+	
+	auto IndexValuePingRDG = GraphBuilder.RegisterExternalBuffer(simData.IndexValueBufferPingPooled);
 	PreprocessParams->IndexValueBuffer = GraphBuilder.CreateUAV(IndexValuePingRDG,PF_R32_UINT);
 	PreprocessParams->View = InView.ViewUniformBuffer;
 	// GS model is placed at world origin by default
@@ -139,7 +116,7 @@ void F_UEGS_PassSVE::PrePostProcessPass_RenderThread(FRDGBuilder& GraphBuilder, 
 	TShaderMapRef<FGSPreprocessCS> PreprocessShader(view.ShaderMap);
 
 	FIntVector GroupCount((simData.NumGS + 255)%256,1,1);
-	GraphBuilder.AddPass(RDG_EVENT_NAME("Preprcess GS"),
+	GraphBuilder.AddPass(RDG_EVENT_NAME("Preprocess GS"),
 		PreprocessParams,
 		ERDGPassFlags::Compute,
 		[PreprocessShader,PreprocessParams,GroupCount](FRHIComputeCommandList& RHICmdList)
@@ -148,22 +125,11 @@ void F_UEGS_PassSVE::PrePostProcessPass_RenderThread(FRDGBuilder& GraphBuilder, 
 		});
 	
 	// TODO : Add GPU Sort Pass to update IndexValueBuffer
-	FRDGBufferDesc depthKeyPongDesc = FRDGBufferDesc::CreateBufferDesc(sizeof(uint32), simData.NumGS);
-	auto depthKeyBufferPongPooled = new FRDGPooledBuffer(
-		simData.DepthKeyBufferPong,
-		depthKeyPongDesc,
-		simData.NumGS,
-		TEXT("Depth Key Buffer Pong RDG"));
-	auto depthKeyBufferPongRDG = GraphBuilder.RegisterExternalBuffer(depthKeyBufferPongPooled);
-
-	FRDGBufferDesc indexValuePongDesc = FRDGBufferDesc::CreateBufferDesc(sizeof(uint32), simData.NumGS);
-	auto indexValueBufferPongPooled = new FRDGPooledBuffer(
-		simData.IndexValueBufferPong,
-		indexValuePongDesc,
-		simData.NumGS,
-		TEXT("Index Value Buffer Pong RDG"));
-	auto IndexValuePongRDG = GraphBuilder.RegisterExternalBuffer(indexValueBufferPongPooled);
-
+	
+	auto depthKeyBufferPongRDG = GraphBuilder.RegisterExternalBuffer(simData.DepthKeyBufferPongPooled);
+	
+	auto IndexValuePongRDG = GraphBuilder.RegisterExternalBuffer(simData.IndexValueBufferPongPooled);
+	
 	auto GpuSortParameters = GraphBuilder.AllocParameters<FGSSortParameters>();
 	GpuSortParameters->RemoteKeySRV1 = GraphBuilder.CreateSRV(depthKeyBufferPingRDG,PF_R32_UINT);
 	GpuSortParameters->RemoteKeySRV2 = GraphBuilder.CreateSRV(depthKeyBufferPongRDG,PF_R32_UINT);
@@ -251,6 +217,8 @@ void F_UEGS_PassSVE::PrePostProcessPass_RenderThread(FRDGBuilder& GraphBuilder, 
 			RHICmdList.SetStreamSource(0, GClearVertexBuffer.VertexBufferRHI, 0);
 			RHICmdList.DrawPrimitive(0, 2, NumGS);
 		});
+	
+	GraphBuilder.IsPIE = true;
 }
 
 FUEGSRenderData::FUEGSRenderData(FRDGBuilder& GraphBuilder, const FViewInfo& view, const FIntRect& viewportSubset, UGSAsset* GSAssetData)
@@ -275,6 +243,13 @@ FUEGSRenderData::FUEGSRenderData(FRDGBuilder& GraphBuilder, const FViewInfo& vie
 			RLM_WriteOnly);
 		FMemory::Memcpy(Dest, GSAssetData->GetData() , BufferStride * BufferNum);
 		FRHICommandListImmediate::Get().UnlockBuffer(PreprocessDataBuffer);
+		
+		FRDGBufferDesc preprocessDesc = FRDGBufferDesc::CreateBufferDesc(sizeof(FVector4f), NumGS * 19);
+		PreprocessBufferPooled = new FRDGPooledBuffer(
+		PreprocessDataBuffer,
+		preprocessDesc,
+		NumGS * 19,
+		TEXT("Preprocess Buffer RDG"));
 	}
 
 	// Create rest of the buffer (We want to manage the buffer ourselves instead of leaving them to rdg)
@@ -288,6 +263,13 @@ FUEGSRenderData::FUEGSRenderData(FRDGBuilder& GraphBuilder, const FViewInfo& vie
 			BufferStride,
 			ERHIAccess::SRVMask | ERHIAccess::UAVMask,
 			VertexAttributeBufferCreateInfo);
+		
+		FRDGBufferDesc vertexAttrDesc = FRDGBufferDesc::CreateBufferDesc(sizeof(FVector4f), NumGS * 3);
+		VertexAttributeBufferPooled = new FRDGPooledBuffer(
+			VertexAttributeBuffer,
+			vertexAttrDesc,
+			NumGS * 3,
+			TEXT("Vertex Attr Buffer RDG"));
 	}
 
 	{
@@ -300,6 +282,13 @@ FUEGSRenderData::FUEGSRenderData(FRDGBuilder& GraphBuilder, const FViewInfo& vie
 			BufferStride,
 			ERHIAccess::SRVMask | ERHIAccess::UAVMask,
 			DepthKeyBufferCreateInfo);
+		
+		FRDGBufferDesc depthKeyDesc = FRDGBufferDesc::CreateBufferDesc(sizeof(uint32), NumGS);
+		DepthKeyBufferPingPooled = new FRDGPooledBuffer(
+			DepthKeyBufferPing,
+			depthKeyDesc,
+			NumGS,
+			TEXT("Depth Key Buffer Ping RDG"));
 	}
 	
 	{
@@ -312,6 +301,15 @@ FUEGSRenderData::FUEGSRenderData(FRDGBuilder& GraphBuilder, const FViewInfo& vie
 			BufferStride,
 			ERHIAccess::SRVMask | ERHIAccess::UAVMask,
 			DepthKeyBufferCreateInfo);
+		
+		FRDGBufferDesc depthKeyPongDesc = FRDGBufferDesc::CreateBufferDesc(sizeof(uint32), NumGS);
+		DepthKeyBufferPongPooled = new FRDGPooledBuffer(
+			DepthKeyBufferPong,
+			depthKeyPongDesc,
+			NumGS,
+			TEXT("Depth Key Buffer Pong RDG"));
+		
+	
 	}
 	
 	{
@@ -324,6 +322,13 @@ FUEGSRenderData::FUEGSRenderData(FRDGBuilder& GraphBuilder, const FViewInfo& vie
 			BufferStride,
 			ERHIAccess::SRVMask | ERHIAccess::UAVMask,
 			IndexValueBufferCreateInfo);
+		
+		FRDGBufferDesc indexValueDesc = FRDGBufferDesc::CreateBufferDesc(sizeof(uint32), NumGS);
+		IndexValueBufferPingPooled = new FRDGPooledBuffer(
+			IndexValueBufferPing,
+			indexValueDesc,
+			NumGS,
+			TEXT("Index Value Buffer Ping RDG"));
 	}
 
 	{
@@ -336,6 +341,13 @@ FUEGSRenderData::FUEGSRenderData(FRDGBuilder& GraphBuilder, const FViewInfo& vie
 			BufferStride,
 			ERHIAccess::SRVMask | ERHIAccess::UAVMask,
 			IndexValueBufferCreateInfo);
+		
+		FRDGBufferDesc indexValuePongDesc = FRDGBufferDesc::CreateBufferDesc(sizeof(uint32), NumGS);
+		IndexValueBufferPongPooled = new FRDGPooledBuffer(
+			IndexValueBufferPong,
+			indexValuePongDesc,
+			NumGS,
+			TEXT("Index Value Buffer Pong RDG"));
 	}
 }
 

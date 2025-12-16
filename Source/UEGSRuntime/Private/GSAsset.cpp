@@ -1,6 +1,7 @@
 #include "GSAsset.h"
 #include <fstream>
 #include <string>
+#include <unordered_map>
 static FVector4f Vector4fAbs(FVector4f v)
 {
 	return FVector4f(FMath::Abs(v.X),FMath::Abs(v.Y),FMath::Abs(v.Z),FMath::Abs(v.W));
