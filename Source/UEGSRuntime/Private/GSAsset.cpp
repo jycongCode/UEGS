@@ -166,29 +166,27 @@ bool UGSAsset::LoadFromFile(FString FilePath, FString TargetAssetName)
 		size_t vertexOffset = i * fields.size();
 		// Position
 		Position[i * 3 + 0] = 100.0f * values[vertexOffset + positionIdx[0]];
-		Position[i * 3 + 1] = -100.0f * values[vertexOffset + positionIdx[2]];
-		Position[i * 3 + 2] = -100.0f * values[vertexOffset + positionIdx[1]];
+		Position[i * 3 + 1] = 100.0f * values[vertexOffset + positionIdx[2]];
+		Position[i * 3 + 2] = 100.0f * values[vertexOffset + positionIdx[1]];
 		// Scale
-		Scale[i * 3 + 0] = 100.0f * FMath::Abs(FMath::Exp(values[vertexOffset + scaleIdx[0]]));
-		Scale[i * 3 + 1] = 100.0f * FMath::Abs(FMath::Exp(values[vertexOffset + scaleIdx[2]]));
-		Scale[i * 3 + 2] = 100.0f * FMath::Abs(FMath::Exp(values[vertexOffset + scaleIdx[1]]));
+		Scale[i * 3 + 0] = 100.0f * FMath::Exp(values[vertexOffset + scaleIdx[0]]);
+		Scale[i * 3 + 1] = 100.0f * FMath::Exp(values[vertexOffset + scaleIdx[2]]);
+		Scale[i * 3 + 2] = 100.0f * FMath::Exp(values[vertexOffset + scaleIdx[1]]);
 		// Rotation
 		FQuat4f Quat = FQuat4f(
-			values[vertexOffset + rotIdx[0]],
 			values[vertexOffset + rotIdx[1]],
 			values[vertexOffset + rotIdx[2]],
-			values[vertexOffset + rotIdx[3]]
+			values[vertexOffset + rotIdx[3]],
+			values[vertexOffset + rotIdx[0]]
 		);
 		Quat.Normalize();
-		Quat = FQuat4f(Quat.Y, Quat.Z, -Quat.W, Quat.X);
-		Quat = PackSmallest3Rotation(FVector4f(Quat.X,Quat.Y,Quat.Z,Quat.W));
 		Rotation[i * 4 + 0] = Quat.X;
-		Rotation[i * 4 + 1] = -Quat.Z;
-		Rotation[i * 4 + 2] = -Quat.Y;
+		Rotation[i * 4 + 1] = Quat.Y;
+		Rotation[i * 4 + 2] = Quat.Z;
 		Rotation[i * 4 + 3] = Quat.W;
 		// Alpha
 		Alpha[i] = 1.0f / (1.0f + FMath::Exp(-values[vertexOffset + alphaIdx[0]]));
-		// Alpha[i] = values[vertexOffset + alphaIdx[0]];
+		Alpha[i] = FMath::Clamp(Alpha[i],0.0f,1.0f);
 		// Color
 		Color[i * 3 + 0] = values[vertexOffset + colorIdx[0]];
 		Color[i * 3 + 1] = values[vertexOffset + colorIdx[1]];
@@ -197,9 +195,9 @@ bool UGSAsset::LoadFromFile(FString FilePath, FString TargetAssetName)
 		// SH Coeffs
 		for (size_t j = 0; j < shIdx.size(); j+=3)
 		{
-			SH[(i * shIdx.size() + j) * 3 + 0] = values[vertexOffset + shIdx[j+0]];
-			SH[(i * shIdx.size() + j) * 3 + 0] = values[vertexOffset + shIdx[j+1]];
-			SH[(i * shIdx.size() + j) * 3 + 0] = values[vertexOffset + shIdx[j+2]];
+			SH[(i * shIdx.size() + j) * 3 + 0] = FMath::Clamp(values[vertexOffset + shIdx[j+0]] * 0.25f,-1.0f,1.0f);
+			SH[(i * shIdx.size() + j) * 3 + 0] = FMath::Clamp(values[vertexOffset + shIdx[j+1]] * 0.25f,-1.0f,1.0f);
+			SH[(i * shIdx.size() + j) * 3 + 0] = FMath::Clamp(values[vertexOffset + shIdx[j+2]] * 0.25f,-1.0f,1.0f);
 		}
 	}
 	// Asset->SetAsset(Position,Scale,Rotation,Alpha,Color,SH,numPoints,DegreeFromDim(shIdx.size()));
@@ -209,7 +207,7 @@ bool UGSAsset::LoadFromFile(FString FilePath, FString TargetAssetName)
 	{
 		FVector3f Positions = {Position[i * 3 + 0],Position[i * 3 + 1],Position[i * 3 + 2]}; 
 		FVector3f Scales = {Scale[i * 3 + 0],Scale[i * 3 + 1],Scale[i * 3 + 2]};
-		FQuat4f Rotations = {Rotation[i * 4 + 0],Rotation[i * 4 + 1],Rotation[i * 4 + 2],Rotation[i * 4 + 3]};
+		FVector4f Rotations = {{Rotation[i * 4 + 1],Rotation[i * 4 + 2],Rotation[i * 4 + 3],Rotation[i * 4 + 0]},Rotation[i * 4 + 3]};
 		float Alphas = Alpha[i];
 		FVector3f F_Dc = {Color[i * 3 + 0],Color[i * 3 + 1],Color[i * 3 + 2]};
 		const int ShDim = shIdx.size() / 3 + 1;
@@ -219,7 +217,7 @@ bool UGSAsset::LoadFromFile(FString FilePath, FString TargetAssetName)
 			FVector3f Sh = {SH[(i * ShDim + j) * 3 + 0],SH[(i * ShDim + j) * 3 + 1],SH[(i * ShDim + j) * 3 + 2]};
 			Points[i].SH[j] = Sh;
 		}
-		Points[i].Position = {Positions,0.0f};
+		Points[i].Position = {Positions,1.0f};
 		Points[i].Rotation = Rotations;
 		Points[i].Scale = Scales;
 		Points[i].DCA = {F_Dc,Alphas};

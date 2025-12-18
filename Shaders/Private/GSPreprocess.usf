@@ -92,55 +92,81 @@ float3x3 CalcMatrixFromRotationScale(float4 rot, float3 scale)
 		0, scale.y, 0,
 		0, 0, scale.z
 	);
+	
 	float x = rot.x;
 	float y = rot.y;
 	float z = rot.z;
 	float w = rot.w;
+	
 	float3x3 mr = float3x3(
 		1-2*(y*y + z*z),   2*(x*y - w*z),   2*(x*z + w*y),
 		  2*(x*y + w*z), 1-2*(x*x + z*z),   2*(y*z - w*x),
 		  2*(x*z - w*y),   2*(y*z + w*x), 1-2*(x*x + y*y)
 	);
-	return mul(ms, mr);
+	return mul(mr, ms);
 }
 
 void CalcCovariance3D(float3x3 rotMat, out float3 sigma0, out float3 sigma1)
 {
-	float3x3 sig = mul(transpose(rotMat),rotMat);
+	float3x3 sig = mul(rotMat,transpose(rotMat));
 	sigma0 = float3(sig._m00, sig._m01, sig._m02);
 	sigma1 = float3(sig._m11, sig._m12, sig._m22);
 }
 
-float3 CalcCovariance2D(float3 worldPos, float3 cov3d0, float3 cov3d1, float4x4 matrixV, float4x4 matrixP, float4 screenParams)
+float2x2 Inverse2x2(float2x2 m)
+{
+	// 计算行列式
+	float det = determinant(m);  // 或者手动计算：m._m00 * m._m11 - m._m01 * m._m10
+    
+	// 如果行列式为 0，矩阵不可逆，返回单位矩阵
+	if (abs(det) < 1e-8)
+	{
+		return float2x2(1, 0, 0, 1);
+	}
+    
+	// 计算逆矩阵
+	float invDet = 1.0 / det;
+    
+	// 伴随矩阵除以行列式
+	return float2x2(
+		m._m11 * invDet,  // 00 位置
+		-m._m01 * invDet, // 01 位置
+		-m._m10 * invDet, // 10 位置
+		m._m00 * invDet   // 11 位置
+	);
+}
+
+
+float3 CalcCovariance2D(float3 worldPos, float3 cov3d0, float3 cov3d1, float4x4 matrixV, float4x4 matrixP, float2 screenParams)
 {
 	float4x4 viewMatrix = matrixV;
 	float3 viewPos = mul(float4(worldPos, 1),viewMatrix).xyz;
 
 	// this is needed in order for splats that are visible in view but clipped "quite a lot" to work
-	float aspect = matrixP._m00 / matrixP._m11;
-	float tanFovX = rcp(matrixP._m00);
-	float tanFovY = rcp(matrixP._m11 * aspect);
+	float tanFovX = View.TanAndInvTanHalfFOV.x;
+	float tanFovY = View.TanAndInvTanHalfFOV.y;
 	float limX = 1.3 * tanFovX;
 	float limY = 1.3 * tanFovY;
 	viewPos.x = clamp(viewPos.x / viewPos.z, -limX, limX) * viewPos.z;
 	viewPos.y = clamp(viewPos.y / viewPos.z, -limY, limY) * viewPos.z;
 
-	float focal = screenParams.x * matrixP._m00 / 2;
-
+	float focalX = screenParams.x / (2.0 * tanFovX);
+	float focalY = screenParams.y / (2.0 * tanFovY);
+	
 	float3x3 J = float3x3(
-		focal / viewPos.z, 0, -(focal * viewPos.x) / (viewPos.z * viewPos.z),
-		0, focal / viewPos.z, -(focal * viewPos.y) / (viewPos.z * viewPos.z),
+		focalX / viewPos.z, 0, -(focalX * viewPos.x) / (viewPos.z * viewPos.z),
+		0, focalY / viewPos.z, -(focalY * viewPos.y) / (viewPos.z * viewPos.z),
 		0, 0, 0
 	);
 	float3x3 W = (float3x3)viewMatrix;
-	float3x3 T = mul(W,J);
+	float3x3 T = mul(J,W);
 	float3x3 V = float3x3(
 		cov3d0.x, cov3d0.y, cov3d0.z,
 		cov3d0.y, cov3d1.x, cov3d1.y,
 		cov3d0.z, cov3d1.y, cov3d1.z
 	);
-	float3x3 cov = mul(mul(transpose(T),V),T);
-
+	float3x3 cov = mul(T, mul(V, transpose(T)));
+	
 	// Low pass filter to make each splat at least 1px size.
 	cov._m00 += 0.3;
 	cov._m11 += 0.3;
@@ -215,41 +241,26 @@ void Main(
 	// Initialize Index Buffer
 	IndexValueBuffer[idx] = idx;
 	
-	float3 gs_LocalPos = PreprocessBuffer[idx * 19 + 0].xyz;
-	float4 gs_Rotation = PreprocessBuffer[idx * 19 + 2];
-	float3 gs_Scale = PreprocessBuffer[idx * 19 + 1].xyz;
-	float4 gs_Color = PreprocessBuffer[idx * 19 + 3];
-	
-	float4 OutPos = float4(0.0,0.0,0.0,0.0);
-	float4 OutAxis = float4(0.0,0.0,0.0,0.0);
-	float4 OutColor = float4(0.0,0.0,0.0,0.0);
+	float3 gsLocalPos = PreprocessBuffer[idx * 19 + 0].xyz;
+	float4 gsRotation = PreprocessBuffer[idx * 19 + 2];
+	float3 gsScale = PreprocessBuffer[idx * 19 + 1].xyz;
+	float4 gsColor = PreprocessBuffer[idx * 19 + 3];
 	
 	float4x4 matrixV = ViewMatrix;
 	float4x4 matrixP = View.ViewToClip;
-	float4 viewParam = View.ViewSizeAndInvSize;
-
-#if 1
-	float3 centerWorldPos = mul(float4(gs_LocalPos,1.0),WorldMatrix).xyz;
-	float4 centerClipPos = mul(float4(centerWorldPos,1.0),ViewProjectionMatrix);
-#else
-	float3 centerWorldPos = DFTransformLocalToTranslatedWorld(gs_LocalPos,PrimaryView.LocalToWorld,PrimaryView.PreViewTranslation).xyz;
-	// float3 centerWorldPos = mul(WorldMatrix,float4(gs_LocalPos,1.0)).xyz;
-	// centerWorldPos = centerWorldPos + LWCHackToFloat(PrimaryView.PreViewTranslation);
-	float4 centerClipPos = mul(View.TranslatedWorldToClip,float4(centerWorldPos,1.0));
-#endif
+	float2 viewParam = View.ViewSizeAndInvSize.xy;
 	
-	float opacityScale = 1.0f;
-	float splatScale = 1.2f;
-
-	OutPos = INVARIANT(centerClipPos);
+	float3 centerWorldPos = mul(float4(gsLocalPos,1.0),WorldMatrix).xyz;
+	float4 centerClipPos = mul(float4(centerWorldPos,1.0),ViewProjectionMatrix);
+	VertexAttributeBuffer[idx * 3] = centerClipPos;
+	
 	bool behindCam = centerClipPos.w <= 0;
-	// behindCam = 0;
+	
+	float splatScale = 1.0f;
+	
 	if (!behindCam)
 	{
-		float4 boxRot = gs_Rotation;
-		float3 boxSize = gs_Scale;
-
-		float3x3 splatRotScaleMat = CalcMatrixFromRotationScale(boxRot,boxSize);
+		float3x3 splatRotScaleMat = CalcMatrixFromRotationScale(gsRotation,gsScale);
 
 		float3 cov3d0,cov3d1;
 		CalcCovariance3D(splatRotScaleMat,cov3d0,cov3d1);
@@ -259,28 +270,24 @@ void Main(
 		cov3d1 *= splatScale2;
 		
 		float3 cov2d = CalcCovariance2D(
-			gs_LocalPos,cov3d0,cov3d1,
+			gsLocalPos,cov3d0,cov3d1,
 			matrixV,
 			matrixP,
 			viewParam);
-
+		
 		float2 axis1,axis2;
 		DecomposeCovariance(cov2d,axis1,axis2);
-		OutAxis = float4(axis1,axis2);
-
+		VertexAttributeBuffer[idx * 3 + 1] = float4(axis1,axis2);
+		
 		float3 worldViewDir = View.WorldViewOriginHigh.xyz - centerWorldPos;
 		float objViewDir = mul(worldViewDir,(float3x3)WorldMatrix);
 		objViewDir = normalize(objViewDir);
 
-		OutColor.xyz = ShadeSH(idx,gs_Color,objViewDir,0,0);
-		float opacity = min(InvSquareCentered01(gs_Color.w) * opacityScale, 65000);
-		OutColor.w = opacity;
+		float3 outColor = ShadeSH(idx,gsColor,objViewDir,0,0);
+		// float opacity = min(InvSquareCentered01(gs_Color.w) * opacityScale, 65000);
+		float opacity = gsColor.w;
+		VertexAttributeBuffer[idx * 3 + 2] = float4(outColor,opacity);
 	}
-	
-	// todo : transform depth into uint and store in DepthKeyBuffer
-	float Depth = OutPos.z / OutPos.w;
-	DepthKeyBuffer[idx] = FloatToSortableUint(Depth);
-	VertexAttributeBuffer[idx * 3] = OutPos;
-	VertexAttributeBuffer[idx * 3 + 1] = OutAxis;
-	VertexAttributeBuffer[idx * 3 + 2] = OutColor;
+	float depth = centerClipPos.z / centerClipPos.w;
+	DepthKeyBuffer[idx] = FloatToSortableUint(depth);
 }

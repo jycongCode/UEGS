@@ -2,9 +2,18 @@
 #include "GPUSort.h"
 #include "RHI.h"
 #include "ClearQuad.h"
+#include "Materials/MaterialIR.h"
 
 #include "Operations/EmbedSurfacePath.h"
 #include "PostProcess/PostProcessInputs.h"
+
+static TAutoConsoleVariable<int32> CVarBlendDebug(
+	TEXT("r.UEGS.BlendDiable"), // 控制台变量名，建议用“模块.”前缀
+	0, // 默认值
+	TEXT("控制自定义调试模式的开关：\n")
+	TEXT("  0: 开启 (默认)\n")
+	TEXT("  1: 关闭GS blend\n"),
+	ECVF_Cheat); 
 
 struct FGSPreprocessCS : FGlobalShader
 {
@@ -93,6 +102,7 @@ void F_UEGS_PassSVE::PrePostProcessPass_RenderThread(FRDGBuilder& GraphBuilder, 
 
 	// Preprocess Pass
 	auto PreprocessParams = GraphBuilder.AllocParameters<FGSPreprocessCS::FParameters>();
+	
 	auto PreprocessBufferRDG = GraphBuilder.RegisterExternalBuffer(simData.PreprocessBufferPooled);
 	PreprocessParams->PreprocessBuffer = GraphBuilder.CreateSRV(PreprocessBufferRDG,PF_A32B32G32R32F);
 
@@ -105,13 +115,12 @@ void F_UEGS_PassSVE::PrePostProcessPass_RenderThread(FRDGBuilder& GraphBuilder, 
 	
 	auto IndexValuePingRDG = GraphBuilder.RegisterExternalBuffer(simData.IndexValueBufferPingPooled);
 	PreprocessParams->IndexValueBuffer = GraphBuilder.CreateUAV(IndexValuePingRDG,PF_R32_UINT);
+	
 	PreprocessParams->View = InView.ViewUniformBuffer;
 	// GS model is placed at world origin by default
 	PreprocessParams->WorldMatrix = FMatrix44f(FTransform::Identity.ToMatrixWithScale());
 	PreprocessParams->ViewMatrix = FMatrix44f(view.ViewMatrices.GetViewMatrix());
 	PreprocessParams->ViewProjectionMatrix = FMatrix44f(view.ViewMatrices.GetViewProjectionMatrix());
-	// UE_LOG(LogTemp, Warning, TEXT("Matrix:\n%s"), *view.ViewMatrices.GetViewMatrix().ToString());
-	// UE_LOG(LogTemp, Warning, TEXT("Matrix:\n%s"), *view.ViewMatrices.GetProjectionMatrix().ToString());
 	PreprocessParams->NumGS = simData.NumGS;
 	TShaderMapRef<FGSPreprocessCS> PreprocessShader(view.ShaderMap);
 
@@ -163,6 +172,11 @@ void F_UEGS_PassSVE::PrePostProcessPass_RenderThread(FRDGBuilder& GraphBuilder, 
 		});
 	
 	// Instance Rendering GS
+	// AddClearRenderTargetPass(
+	// 	GraphBuilder, 
+	// 	Inputs.SceneTextures->GetContents()->SceneColorTexture, 
+	// 	FLinearColor(0.0f, 0.0f, 0.0f, 0.0f) // 清除颜色
+	// );
 	auto RenderParameters = GraphBuilder.AllocParameters<FGSRenderParameters>();
 	RenderParameters->VertexAttributeBuffer = GraphBuilder.CreateSRV(VertexAttributeRDG,PF_A32B32G32R32F);
 	RenderParameters->IndexValueBuffer = GraphBuilder.CreateSRV(IndexValuePingRDG,PF_R32_UINT);
@@ -192,8 +206,15 @@ void F_UEGS_PassSVE::PrePostProcessPass_RenderThread(FRDGBuilder& GraphBuilder, 
 			// Set new states
 			FRHIBlendState* BlendStateRHI = TStaticBlendState<
 				CW_RGBA,
-				BO_Add,BF_InverseSourceAlpha,BF_One,
-				BO_Add,BF_InverseSourceAlpha,BF_One>::GetRHI();
+				BO_Add,BF_DestAlpha,BF_One,
+				BO_Add,BF_Zero,BF_InverseSourceAlpha>::GetRHI();
+			
+			if (CVarBlendDebug.GetValueOnRenderThread() == 1)
+			{
+				BlendStateRHI = TStaticBlendState<CW_RGBA,
+				BO_Add,BF_One,BF_Zero,BO_Add,BF_One,BF_Zero>::GetRHI();
+			}
+			
 			
 			FRHIDepthStencilState* DepthStencilStateRHI = TStaticDepthStencilState<false, CF_Always>::GetRHI();
 
@@ -217,8 +238,6 @@ void F_UEGS_PassSVE::PrePostProcessPass_RenderThread(FRDGBuilder& GraphBuilder, 
 			RHICmdList.SetStreamSource(0, GClearVertexBuffer.VertexBufferRHI, 0);
 			RHICmdList.DrawPrimitive(0, 2, NumGS);
 		});
-	
-	GraphBuilder.IsPIE = true;
 }
 
 FUEGSRenderData::FUEGSRenderData(FRDGBuilder& GraphBuilder, const FViewInfo& view, const FIntRect& viewportSubset, UGSAsset* GSAssetData)
@@ -244,11 +263,11 @@ FUEGSRenderData::FUEGSRenderData(FRDGBuilder& GraphBuilder, const FViewInfo& vie
 		FMemory::Memcpy(Dest, GSAssetData->GetData() , BufferStride * BufferNum);
 		FRHICommandListImmediate::Get().UnlockBuffer(PreprocessDataBuffer);
 		
-		FRDGBufferDesc preprocessDesc = FRDGBufferDesc::CreateBufferDesc(sizeof(FVector4f), NumGS * 19);
+		FRDGBufferDesc preprocessDesc = FRDGBufferDesc::CreateBufferDesc(sizeof(FVector4f), NumGS *  (sizeof(FGSPoint) / sizeof(FVector4f)));
 		PreprocessBufferPooled = new FRDGPooledBuffer(
 		PreprocessDataBuffer,
 		preprocessDesc,
-		NumGS * 19,
+		NumGS *  (sizeof(FGSPoint) / sizeof(FVector4f)),
 		TEXT("Preprocess Buffer RDG"));
 	}
 
@@ -264,11 +283,11 @@ FUEGSRenderData::FUEGSRenderData(FRDGBuilder& GraphBuilder, const FViewInfo& vie
 			ERHIAccess::SRVMask | ERHIAccess::UAVMask,
 			VertexAttributeBufferCreateInfo);
 		
-		FRDGBufferDesc vertexAttrDesc = FRDGBufferDesc::CreateBufferDesc(sizeof(FVector4f), NumGS * 3);
+		FRDGBufferDesc vertexAttrDesc = FRDGBufferDesc::CreateBufferDesc(sizeof(FVector4f), NumGS * (sizeof(FVertexAttribute) / sizeof(FVector4f)));
 		VertexAttributeBufferPooled = new FRDGPooledBuffer(
 			VertexAttributeBuffer,
 			vertexAttrDesc,
-			NumGS * 3,
+			NumGS * (sizeof(FVertexAttribute) / sizeof(FVector4f)),
 			TEXT("Vertex Attr Buffer RDG"));
 	}
 

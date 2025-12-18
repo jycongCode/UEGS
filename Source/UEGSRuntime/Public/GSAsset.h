@@ -5,16 +5,16 @@ struct FGSPoint
 {
 	FVector4f Position;
 	FVector4f Scale;
-	FQuat4f Rotation;
+	FVector4f Rotation;
 	FVector4f DCA;
 	FVector4f SH[15];
 };
 
 struct FVertexAttribute
 {
-	FVector4f Position;
+	FVector4f NdcPosition;
 	FVector4f Axis;
-	FVector4f ColorA;
+	FVector4f DcAlpha;
 };
 
 UCLASS(Blueprintable, BlueprintType, EditInlineNew, CollapseCategories)
