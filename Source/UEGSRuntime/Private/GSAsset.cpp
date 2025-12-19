@@ -209,7 +209,7 @@ bool UGSAsset::LoadFromFile(FString FilePath, FString TargetAssetName)
 		FVector3f Scales = {Scale[i * 3 + 0],Scale[i * 3 + 1],Scale[i * 3 + 2]};
 		FVector4f Rotations = {{Rotation[i * 4 + 1],Rotation[i * 4 + 2],Rotation[i * 4 + 3],Rotation[i * 4 + 0]},Rotation[i * 4 + 3]};
 		float Alphas = Alpha[i];
-		FVector3f F_Dc = {Color[i * 3 + 0],Color[i * 3 + 1],Color[i * 3 + 2]};
+		FVector3f F_Dc = {Color[i * 3 + 0]*0.28209479177387814f+0.5f,Color[i * 3 + 1]*0.28209479177387814f+0.5f,Color[i * 3 + 2] * 0.28209479177387814f+0.5f};
 		const int ShDim = shIdx.size() / 3 + 1;
 		
 		for (size_t j = 0; j < FMath::Min(ShDim,15); j++)

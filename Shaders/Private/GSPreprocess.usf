@@ -256,7 +256,8 @@ void Main(
 	
 	bool behindCam = centerClipPos.w <= 0;
 	
-	float splatScale = 1.5f;
+	float splatScale = 1.0f;
+	float opacityScale = 0.6f;
 	
 	if (!behindCam)
 	{
@@ -285,7 +286,7 @@ void Main(
 
 		float3 outColor = ShadeSH(idx,gsColor,objViewDir,0,0);
 		// float opacity = min(InvSquareCentered01(gs_Color.w) * opacityScale, 65000);
-		float opacity = gsColor.w;
+		float opacity = gsColor.w * opacityScale * opacityScale;
 		VertexAttributeBuffer[idx * 3 + 2] = float4(outColor,opacity);
 	}
 	float depth = centerClipPos.z / centerClipPos.w;
