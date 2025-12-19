@@ -211,8 +211,10 @@ void F_UEGS_PassSVE::PrePostProcessPass_RenderThread(FRDGBuilder& GraphBuilder, 
 			
 			if (CVarBlendDebug.GetValueOnRenderThread() == 1)
 			{
-				BlendStateRHI = TStaticBlendState<CW_RGBA,
-				BO_Add,BF_One,BF_Zero,BO_Add,BF_One,BF_Zero>::GetRHI();
+				BlendStateRHI = TStaticBlendState<
+				CW_RGBA,
+				BO_Add,BF_DestAlpha,BF_One,
+				BO_Add,BF_Zero,BF_One>::GetRHI();
 			}
 			
 			

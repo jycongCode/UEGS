@@ -15,7 +15,7 @@ FGSVertexOutput MainVS(
 	uint InstanceId : SV_InstanceID)
 {
 	FGSVertexOutput Output = (FGSVertexOutput)0;
-	uint idx = IndexValueBuffer[InstanceId];
+	uint idx = IndexValueBuffer[NumGS - InstanceId];
 	float4 centerClipPos = VertexAttributeBuffer[idx * 3];
 	float2 axis1 = VertexAttributeBuffer[idx * 3 + 1].xy;
 	float2 axis2 = VertexAttributeBuffer[idx * 3 + 1].zw;

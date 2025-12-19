@@ -256,7 +256,7 @@ void Main(
 	
 	bool behindCam = centerClipPos.w <= 0;
 	
-	float splatScale = 1.0f;
+	float splatScale = 1.5f;
 	
 	if (!behindCam)
 	{
