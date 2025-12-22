@@ -7,8 +7,9 @@
 void FUEGSRuntimeModule::StartupModule()
 {
 	// This code will execute after your module is loaded into memory; the exact timing is specified in the .uplugin file per-module
-	FString PluginShaderDir = FPaths::Combine(IPluginManager::Get().FindPlugin(TEXT("UEGS"))->GetBaseDir(), TEXT("Shaders/Private"));
-	AddShaderSourceDirectoryMapping(TEXT("/UEGS"), PluginShaderDir);
+	auto thisPlugin = IPluginManager::Get().FindPlugin(TEXT("UEGS"));
+	auto thisShadersDir = FPaths::Combine(thisPlugin->GetBaseDir(), TEXT("Shaders"),TEXT("UEGS"));
+	AddShaderSourceDirectoryMapping(TEXT("/UEGS"), thisShadersDir);
 
 }
 
