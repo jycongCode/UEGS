@@ -381,8 +381,11 @@ public:
 
 	U_EGP_RenderPassComponent();
 	
-	virtual void BeginPlay() override;
-	virtual void EndPlay(const EEndPlayReason::Type reason) override;
+	// virtual void BeginPlay() override;
+	// virtual void EndPlay(const EEndPlayReason::Type reason) override;
+	
+	virtual void OnRegister() override;
+	virtual void OnUnregister() override;
 	virtual void TickComponent(float deltaSeconds, ELevelTick tickType, FActorComponentTickFunction* thisTickFn) override;
 
 	//Reports the kind of render pass this component is meant to be a part of.
@@ -823,6 +826,7 @@ protected:
 	//Note that you do not need to manually delete the scene-view extension, as it's tracked with reference-counting.
 	virtual void CleanupThisPass_RenderThread(UWorld& thisWorld, bool subsystemIsDying) { SceneViewExtension->KillRendering(); }
 	
+public:
 	//Registers the given component so it starts participating in the pass.
 	//If it was already registered, nothing happens.
 	virtual void RegisterPassComponent(U_EGP_RenderPassComponent*);
@@ -832,6 +836,7 @@ protected:
 	//If the component was not registered, nothing happens.
 	virtual void UnregisterPassComponent(U_EGP_RenderPassComponent*);
 
+protected:
 	UPROPERTY(BlueprintReadOnly, VisibleInstanceOnly, Transient)
 	U_EGP_RenderPassSubsystem* Subsystem = nullptr;
 	TSharedPtr<F_EGP_RenderPassSceneViewExtension> SceneViewExtension; 

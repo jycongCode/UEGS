@@ -1,6 +1,4 @@
 #pragma once
-#include "GSAsset.generated.h"
-
 struct FGSPoint
 {
 	FVector4f Position;
@@ -17,26 +15,16 @@ struct FVertexAttribute
 	FVector4f DcAlpha;
 };
 
-UCLASS(Blueprintable, BlueprintType, EditInlineNew, CollapseCategories)
-class UGSAsset : public UObject
+class FGSAsset
 {
-	GENERATED_BODY()
 	
 public:
-	
-	UPROPERTY(VisibleAnywhere,BlueprintReadOnly)
-	FString AssetName;
-	
-	UPROPERTY(VisibleAnywhere,BlueprintReadOnly)
 	int MaxSHDegree = 0;
 
-	UPROPERTY(VisibleAnywhere,BlueprintReadOnly)
 	int NumGS = 0;
 	
-	UFUNCTION(BlueprintCallable)
-	bool LoadFromFile(FString FilePath,FString TargetAssetName);
+	bool LoadFromFile(FString FilePath);
 
-	UFUNCTION(BlueprintCallable)
 	void Test()
 	{
 		for (int i = 0;i<8;++i)

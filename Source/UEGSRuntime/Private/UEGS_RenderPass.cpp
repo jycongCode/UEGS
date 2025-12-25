@@ -2,11 +2,12 @@
 #include "GPUSort.h"
 #include "RHI.h"
 #include "ClearQuad.h"
-#include "Materials/MaterialIR.h"
-
+#include "UEGS_Component.h"
+#include "GSAsset.h"
 #include "Operations/EmbedSurfacePath.h"
 #include "PostProcess/PostProcessInputs.h"
 
+DEFINE_LOG_CATEGORY(LogUEGS);
 static TAutoConsoleVariable<int32> CVarBlendDebug(
 	TEXT("r.UEGS.BlendDiable"), // 控制台变量名，建议用“模块.”前缀
 	0, // 默认值
@@ -75,7 +76,7 @@ IMPLEMENT_GLOBAL_SHADER(FGSRenderPS,"/UEGS/GSRender.usf","MainPS",SF_Pixel);
 
 TSharedRef<F_EGP_RenderPassSceneViewExtension> U_UEGS_RenderPass::InitThisPass_GameThread(UWorld& thisWorld)
 {
-	ViewFilter->FilterByPlayerIdx(0);
+	// ViewFilter->FilterByPlayerIdx(0);
 	return FSceneViewExtensions::NewExtension<F_UEGS_PassSVE>(this);
 }
 
@@ -88,7 +89,49 @@ void U_UEGS_RenderPass::Tick_GameThread(UWorld& thisWorld, float deltaSeconds)
 void U_UEGS_RenderPass::Tick_RenderThread(const FSceneInterface& thisScene, float gameThreadDeltaSeconds)
 {
 	Super::Tick_RenderThread(thisScene, gameThreadDeltaSeconds);
-	PerViewData.Tick();
+	for (auto&[Name,Data] : SplatData)
+	{
+		Data.Tick();
+	}
+}
+
+void U_UEGS_RenderPass::RegisterPassComponent(U_EGP_RenderPassComponent* Component)
+{
+	Super::RegisterPassComponent(Component);
+	auto* TargetComponent = Cast<U_UEGS_Component>(Component);
+	check(TargetComponent != nullptr);
+	FString TargetName;
+	IPlatformFile&PlatformFile = FPlatformFileManager::Get().GetPlatformFile();
+	if (PlatformFile.FileExists(*TargetComponent->GSFilePath))
+	{
+		FGSAsset* NewAsset = new FGSAsset;
+		if (!NewAsset->LoadFromFile(*TargetComponent->GSFilePath))
+		{
+		}else
+		{
+			TargetAsset = NewAsset;
+			TargetName = FPaths::GetBaseFilename(*TargetComponent->GSFilePath);
+		}
+	}
+	if (TargetAsset)
+	{
+		int SH = TargetComponent->SH;
+		float SplatScale = TargetComponent->SplatScale;
+		float OpacityScale = TargetComponent->OpacityScale;
+		FMatrix44f WorldTransform = FMatrix44f(TargetComponent->GetComponentTransform().ToMatrixNoScale());
+		FVector3f Scale = FVector3f(TargetComponent->GetComponentScale());
+		SplatAssets.Add(TargetComponent->Name,{TargetAsset,SH,WorldTransform,Scale,SplatScale,OpacityScale});
+		SplatData.Add(TargetComponent->Name,T_EGP_PerViewData<FUEGSRenderData>());
+	}
+}
+
+void U_UEGS_RenderPass::UnregisterPassComponent(U_EGP_RenderPassComponent* Component)
+{
+	auto* TargetComponent = Cast<U_UEGS_Component>(Component);
+	check(TargetComponent != nullptr);
+	SplatAssets.Remove(TargetComponent->Name);
+	SplatData.Remove(TargetComponent->Name);
+	Super::UnregisterPassComponent(Component);
 }
 
 void F_UEGS_PassSVE::PrePostProcessPass_RenderThread(FRDGBuilder& GraphBuilder, const FSceneView& InView, const FPostProcessingInputs& Inputs)
@@ -98,159 +141,178 @@ void F_UEGS_PassSVE::PrePostProcessPass_RenderThread(FRDGBuilder& GraphBuilder, 
 	
 	if (!Pass->ViewFilter->ShouldRenderFor(view))return;
 	
-	auto& simData = Pass->PerViewData.DataForView(GraphBuilder, view, Pass->GSAssetData);
-
-	// Preprocess Pass
-	auto PreprocessParams = GraphBuilder.AllocParameters<FGSPreprocessCS::FParameters>();
-	
-	auto PreprocessBufferRDG = GraphBuilder.RegisterExternalBuffer(simData.PreprocessBufferPooled);
-	PreprocessParams->PreprocessBuffer = GraphBuilder.CreateSRV(PreprocessBufferRDG,PF_A32B32G32R32F);
-
-	
-	auto VertexAttributeRDG = GraphBuilder.RegisterExternalBuffer(simData.VertexAttributeBufferPooled);
-	PreprocessParams->VertexAttributeBuffer = GraphBuilder.CreateUAV(VertexAttributeRDG,PF_A32B32G32R32F);
-	
-	auto depthKeyBufferPingRDG = GraphBuilder.RegisterExternalBuffer(simData.DepthKeyBufferPingPooled);
-	PreprocessParams->DepthKeyBuffer = GraphBuilder.CreateUAV(depthKeyBufferPingRDG,PF_R32_UINT);
-	
-	auto IndexValuePingRDG = GraphBuilder.RegisterExternalBuffer(simData.IndexValueBufferPingPooled);
-	PreprocessParams->IndexValueBuffer = GraphBuilder.CreateUAV(IndexValuePingRDG,PF_R32_UINT);
-	
-	PreprocessParams->View = InView.ViewUniformBuffer;
-	// GS model is placed at world origin by default
-	PreprocessParams->WorldMatrix = FMatrix44f(FTransform::Identity.ToMatrixWithScale());
-	PreprocessParams->ViewMatrix = FMatrix44f(view.ViewMatrices.GetViewMatrix());
-	PreprocessParams->ViewProjectionMatrix = FMatrix44f(view.ViewMatrices.GetViewProjectionMatrix());
-	PreprocessParams->NumGS = simData.NumGS;
-	TShaderMapRef<FGSPreprocessCS> PreprocessShader(view.ShaderMap);
-
-	FIntVector GroupCount((simData.NumGS + 255)%256,1,1);
-	GraphBuilder.AddPass(RDG_EVENT_NAME("Preprocess GS"),
-		PreprocessParams,
-		ERDGPassFlags::Compute,
-		[PreprocessShader,PreprocessParams,GroupCount](FRHIComputeCommandList& RHICmdList)
+	for (auto&[Name,Resource] : Pass->SplatAssets)
+	{
+		check(Pass->SplatData.Find(Name) != nullptr);
+		if (!Resource.Asset)
 		{
-			FComputeShaderUtils::Dispatch(RHICmdList,PreprocessShader,*PreprocessParams,GroupCount);
-		});
-	
-	// TODO : Add GPU Sort Pass to update IndexValueBuffer
-	
-	auto depthKeyBufferPongRDG = GraphBuilder.RegisterExternalBuffer(simData.DepthKeyBufferPongPooled);
-	
-	auto IndexValuePongRDG = GraphBuilder.RegisterExternalBuffer(simData.IndexValueBufferPongPooled);
-	
-	auto GpuSortParameters = GraphBuilder.AllocParameters<FGSSortParameters>();
-	GpuSortParameters->RemoteKeySRV1 = GraphBuilder.CreateSRV(depthKeyBufferPingRDG,PF_R32_UINT);
-	GpuSortParameters->RemoteKeySRV2 = GraphBuilder.CreateSRV(depthKeyBufferPongRDG,PF_R32_UINT);
-	GpuSortParameters->RemoteKeyUAV1 = GraphBuilder.CreateUAV(depthKeyBufferPingRDG,PF_R32_UINT);
-	GpuSortParameters->RemoteKeyUAV2 = GraphBuilder.CreateUAV(depthKeyBufferPongRDG,PF_R32_UINT);
-	
-	GpuSortParameters->RemoteValueSRV1 = GraphBuilder.CreateSRV(IndexValuePingRDG,PF_R32_UINT);
-	GpuSortParameters->RemoteValueSRV2 = GraphBuilder.CreateSRV(IndexValuePongRDG,PF_R32_UINT);
-	GpuSortParameters->RemoteValueUAV1 = GraphBuilder.CreateUAV(IndexValuePingRDG,PF_R32_UINT);
-	GpuSortParameters->RemoteValueUAV2 = GraphBuilder.CreateUAV(IndexValuePongRDG,PF_R32_UINT);
-	
-	GraphBuilder.AddPass(RDG_EVENT_NAME("Gpu Sort GS"),
-		GpuSortParameters,
-		ERDGPassFlags::Compute,
-		[GpuSortParameters,CurrentFeatureLevel=InView.FeatureLevel,Count=simData.NumGS](FRHICommandList& RHICmdList)
-		{
-			FGPUSortBuffers SortBuffers;
-			SortBuffers.RemoteKeySRVs[0] = GpuSortParameters->RemoteKeySRV1->GetRHI();
-			SortBuffers.RemoteKeySRVs[1] = GpuSortParameters->RemoteKeySRV2->GetRHI();
-			SortBuffers.RemoteKeyUAVs[0] = GpuSortParameters->RemoteKeyUAV1->GetRHI();
-			SortBuffers.RemoteKeyUAVs[1] = GpuSortParameters->RemoteKeyUAV2->GetRHI();
-			
-			SortBuffers.RemoteValueSRVs[0] = GpuSortParameters->RemoteValueSRV1->GetRHI();
-			SortBuffers.RemoteValueSRVs[1] = GpuSortParameters->RemoteValueSRV2->GetRHI();
-			SortBuffers.RemoteValueUAVs[0] = GpuSortParameters->RemoteValueUAV1->GetRHI();
-			SortBuffers.RemoteValueUAVs[1] = GpuSortParameters->RemoteValueUAV2->GetRHI();
-	
-			SortBuffers.FirstValuesSRV = GpuSortParameters->RemoteValueSRV1->GetRHI();
-			SortBuffers.FinalValuesUAV = GpuSortParameters->RemoteValueUAV1->GetRHI();
-			SortGPUBuffers(RHICmdList,SortBuffers,0,0xFFFFFFFF,Count,CurrentFeatureLevel);
-		});
-	
-	// Instance Rendering GS
-	// AddClearRenderTargetPass(
-	// 	GraphBuilder, 
-	// 	Inputs.SceneTextures->GetContents()->SceneColorTexture, 
-	// 	FLinearColor(0.0f, 0.0f, 0.0f, 0.0f) // 清除颜色
-	// );
-	auto RenderParameters = GraphBuilder.AllocParameters<FGSRenderParameters>();
-	RenderParameters->VertexAttributeBuffer = GraphBuilder.CreateSRV(VertexAttributeRDG,PF_A32B32G32R32F);
-	RenderParameters->IndexValueBuffer = GraphBuilder.CreateSRV(IndexValuePingRDG,PF_R32_UINT);
-	RenderParameters->View = InView.ViewUniformBuffer;
-	RenderParameters->NumGS = simData.NumGS;
-	RenderParameters->RenderTargets[0] = {
-		Inputs.SceneTextures->GetContents()->SceneColorTexture,
-		ERenderTargetLoadAction::EClear
-	};
-	
-	RenderParameters->RenderTargets.DepthStencil = FDepthStencilBinding(
-		Inputs.SceneTextures->GetContents()->SceneDepthTexture,
-		ERenderTargetLoadAction::ELoad,
-		ERenderTargetLoadAction::ELoad,
-		FExclusiveDepthStencil::DepthRead_StencilNop
-	);
-	
-	TShaderMapRef<FGSRenderVS> VertexShader(view.ShaderMap);
-	TShaderMapRef<FGSRenderPS> PixelShader(view.ShaderMap);
-
-	GraphBuilder.AddPass(RDG_EVENT_NAME("GS Instance Draw"),
-		RenderParameters,
-		ERDGPassFlags::Raster,
-		[VertexShader,PixelShader,RenderParameters,NumGS=simData.NumGS](FRHICommandList& RHICmdList)
-		{
-			
-			// Set new states
-			FRHIBlendState* BlendStateRHI = TStaticBlendState<
-				CW_RGBA,
-				BO_Add,BF_DestAlpha,BF_One,
-				BO_Add,BF_Zero,BF_InverseSourceAlpha>::GetRHI();
-			
-			if (CVarBlendDebug.GetValueOnRenderThread() == 1)
+			UE_LOG(LogUEGS,Warning,TEXT("SplatAsset(%s) does not exist"),*Name);
+			continue;
+		}
+		
+		auto& simData = Pass->SplatData[Name].DataForView(GraphBuilder, view, Resource);
+		
+		// Preprocess Pass
+		auto PreprocessParams = GraphBuilder.AllocParameters<FGSPreprocessCS::FParameters>();
+		
+		auto PreprocessBufferRDG = GraphBuilder.RegisterExternalBuffer(simData.PreprocessBufferPooled);
+		PreprocessParams->PreprocessBuffer = GraphBuilder.CreateSRV(PreprocessBufferRDG,PF_A32B32G32R32F);
+		
+		
+		auto VertexAttributeRDG = GraphBuilder.RegisterExternalBuffer(simData.VertexAttributeBufferPooled);
+		PreprocessParams->VertexAttributeBuffer = GraphBuilder.CreateUAV(VertexAttributeRDG,PF_A32B32G32R32F);
+		
+		auto depthKeyBufferPingRDG = GraphBuilder.RegisterExternalBuffer(simData.DepthKeyBufferPingPooled);
+		PreprocessParams->DepthKeyBuffer = GraphBuilder.CreateUAV(depthKeyBufferPingRDG,PF_R32_UINT);
+		
+		auto IndexValuePingRDG = GraphBuilder.RegisterExternalBuffer(simData.IndexValueBufferPingPooled);
+		PreprocessParams->IndexValueBuffer = GraphBuilder.CreateUAV(IndexValuePingRDG,PF_R32_UINT);
+		
+		PreprocessParams->View = InView.ViewUniformBuffer;
+		// GS model is placed at world origin by default
+		PreprocessParams->WorldMatrix = FMatrix44f(FTransform::Identity.ToMatrixWithScale());
+		PreprocessParams->ViewMatrix = FMatrix44f(view.ViewMatrices.GetViewMatrix());
+		PreprocessParams->ViewProjectionMatrix = FMatrix44f(view.ViewMatrices.GetViewProjectionMatrix());
+		PreprocessParams->NumGS = simData.NumGS;
+		TShaderMapRef<FGSPreprocessCS> PreprocessShader(view.ShaderMap);
+		
+		FIntVector GroupCount((simData.NumGS + 255)%256,1,1);
+		GraphBuilder.AddPass(RDG_EVENT_NAME("Preprocess GS"),
+			PreprocessParams,
+			ERDGPassFlags::Compute,
+			[PreprocessShader,PreprocessParams,GroupCount](FRHIComputeCommandList& RHICmdList)
 			{
-				BlendStateRHI = TStaticBlendState<
-				CW_RGBA,
-				BO_Add,BF_DestAlpha,BF_One,
-				BO_Add,BF_Zero,BF_One>::GetRHI();
-			}
-			
-			
-			FRHIDepthStencilState* DepthStencilStateRHI = TStaticDepthStencilState<false, CF_Always>::GetRHI();
-
-			FGraphicsPipelineStateInitializer GraphicsPSOInit;
-			RHICmdList.ApplyCachedRenderTargets(GraphicsPSOInit);
-
-			GraphicsPSOInit.RasterizerState = TStaticRasterizerState<FM_Solid, CM_None>::GetRHI();
-			GraphicsPSOInit.BlendState = BlendStateRHI;
-			GraphicsPSOInit.DepthStencilState = DepthStencilStateRHI;
-
-			GraphicsPSOInit.BoundShaderState.VertexDeclarationRHI = GetVertexDeclarationFVector4();
-			GraphicsPSOInit.BoundShaderState.VertexShaderRHI = VertexShader.GetVertexShader();
-			GraphicsPSOInit.BoundShaderState.PixelShaderRHI = PixelShader.GetPixelShader();
-			GraphicsPSOInit.PrimitiveType = PT_TriangleStrip;
-
-			SetGraphicsPipelineState(RHICmdList, GraphicsPSOInit, 0);
-			
-			SetShaderParameters(RHICmdList,VertexShader,VertexShader.GetVertexShader(),*RenderParameters);
-			SetShaderParameters(RHICmdList,PixelShader,PixelShader.GetPixelShader(),*RenderParameters);
-
-			RHICmdList.SetStreamSource(0, GClearVertexBuffer.VertexBufferRHI, 0);
-			RHICmdList.DrawPrimitive(0, 2, NumGS);
-		});
+				FComputeShaderUtils::Dispatch(RHICmdList,PreprocessShader,*PreprocessParams,GroupCount);
+			});
+		
+		// TODO : Add GPU Sort Pass to update IndexValueBuffer
+		
+		auto depthKeyBufferPongRDG = GraphBuilder.RegisterExternalBuffer(simData.DepthKeyBufferPongPooled);
+		
+		auto IndexValuePongRDG = GraphBuilder.RegisterExternalBuffer(simData.IndexValueBufferPongPooled);
+		
+		auto GpuSortParameters = GraphBuilder.AllocParameters<FGSSortParameters>();
+		GpuSortParameters->RemoteKeySRV1 = GraphBuilder.CreateSRV(depthKeyBufferPingRDG,PF_R32_UINT);
+		GpuSortParameters->RemoteKeySRV2 = GraphBuilder.CreateSRV(depthKeyBufferPongRDG,PF_R32_UINT);
+		GpuSortParameters->RemoteKeyUAV1 = GraphBuilder.CreateUAV(depthKeyBufferPingRDG,PF_R32_UINT);
+		GpuSortParameters->RemoteKeyUAV2 = GraphBuilder.CreateUAV(depthKeyBufferPongRDG,PF_R32_UINT);
+		
+		GpuSortParameters->RemoteValueSRV1 = GraphBuilder.CreateSRV(IndexValuePingRDG,PF_R32_UINT);
+		GpuSortParameters->RemoteValueSRV2 = GraphBuilder.CreateSRV(IndexValuePongRDG,PF_R32_UINT);
+		GpuSortParameters->RemoteValueUAV1 = GraphBuilder.CreateUAV(IndexValuePingRDG,PF_R32_UINT);
+		GpuSortParameters->RemoteValueUAV2 = GraphBuilder.CreateUAV(IndexValuePongRDG,PF_R32_UINT);
+		
+		GraphBuilder.AddPass(RDG_EVENT_NAME("Gpu Sort GS"),
+			GpuSortParameters,
+			ERDGPassFlags::Compute,
+			[GpuSortParameters,CurrentFeatureLevel=InView.FeatureLevel,Count=simData.NumGS](FRHICommandList& RHICmdList)
+			{
+				FGPUSortBuffers SortBuffers;
+				SortBuffers.RemoteKeySRVs[0] = GpuSortParameters->RemoteKeySRV1->GetRHI();
+				SortBuffers.RemoteKeySRVs[1] = GpuSortParameters->RemoteKeySRV2->GetRHI();
+				SortBuffers.RemoteKeyUAVs[0] = GpuSortParameters->RemoteKeyUAV1->GetRHI();
+				SortBuffers.RemoteKeyUAVs[1] = GpuSortParameters->RemoteKeyUAV2->GetRHI();
+				
+				SortBuffers.RemoteValueSRVs[0] = GpuSortParameters->RemoteValueSRV1->GetRHI();
+				SortBuffers.RemoteValueSRVs[1] = GpuSortParameters->RemoteValueSRV2->GetRHI();
+				SortBuffers.RemoteValueUAVs[0] = GpuSortParameters->RemoteValueUAV1->GetRHI();
+				SortBuffers.RemoteValueUAVs[1] = GpuSortParameters->RemoteValueUAV2->GetRHI();
+		
+				SortBuffers.FirstValuesSRV = GpuSortParameters->RemoteValueSRV1->GetRHI();
+				SortBuffers.FinalValuesUAV = GpuSortParameters->RemoteValueUAV1->GetRHI();
+				SortGPUBuffers(RHICmdList,SortBuffers,0,0xFFFFFFFF,Count,CurrentFeatureLevel);
+			});
+		
+		// Instance Rendering GS
+		// AddClearRenderTargetPass(
+		// 	GraphBuilder, 
+		// 	Inputs.SceneTextures->GetContents()->SceneColorTexture, 
+		// 	FLinearColor(0.0f, 0.0f, 0.0f, 0.0f) // 清除颜色
+		// );
+		auto RenderParameters = GraphBuilder.AllocParameters<FGSRenderParameters>();
+		RenderParameters->VertexAttributeBuffer = GraphBuilder.CreateSRV(VertexAttributeRDG,PF_A32B32G32R32F);
+		RenderParameters->IndexValueBuffer = GraphBuilder.CreateSRV(IndexValuePingRDG,PF_R32_UINT);
+		RenderParameters->View = InView.ViewUniformBuffer;
+		RenderParameters->NumGS = simData.NumGS;
+		RenderParameters->RenderTargets[0] = {
+			Inputs.SceneTextures->GetContents()->SceneColorTexture,
+			ERenderTargetLoadAction::EClear
+		};
+		
+		RenderParameters->RenderTargets.DepthStencil = FDepthStencilBinding(
+			Inputs.SceneTextures->GetContents()->SceneDepthTexture,
+			ERenderTargetLoadAction::ELoad,
+			ERenderTargetLoadAction::ELoad,
+			FExclusiveDepthStencil::DepthRead_StencilNop
+		);
+		
+		TShaderMapRef<FGSRenderVS> VertexShader(view.ShaderMap);
+		TShaderMapRef<FGSRenderPS> PixelShader(view.ShaderMap);
+		
+		GraphBuilder.AddPass(RDG_EVENT_NAME("GS Instance Draw"),
+			RenderParameters,
+			ERDGPassFlags::Raster,
+			[VertexShader,PixelShader,RenderParameters,NumGS=simData.NumGS](FRHICommandList& RHICmdList)
+			{
+				
+				// Set new states
+				FRHIBlendState* BlendStateRHI = TStaticBlendState<
+					CW_RGBA,
+					BO_Add,BF_DestAlpha,BF_One,
+					BO_Add,BF_Zero,BF_InverseSourceAlpha>::GetRHI();
+				
+				if (CVarBlendDebug.GetValueOnRenderThread() == 1)
+				{
+					BlendStateRHI = TStaticBlendState<
+					CW_RGBA,
+					BO_Add,BF_DestAlpha,BF_One,
+					BO_Add,BF_Zero,BF_One>::GetRHI();
+				}
+				
+				
+				FRHIDepthStencilState* DepthStencilStateRHI = TStaticDepthStencilState<false, CF_Always>::GetRHI();
+		
+				FGraphicsPipelineStateInitializer GraphicsPSOInit;
+				RHICmdList.ApplyCachedRenderTargets(GraphicsPSOInit);
+		
+				GraphicsPSOInit.RasterizerState = TStaticRasterizerState<FM_Solid, CM_None>::GetRHI();
+				GraphicsPSOInit.BlendState = BlendStateRHI;
+				GraphicsPSOInit.DepthStencilState = DepthStencilStateRHI;
+		
+				GraphicsPSOInit.BoundShaderState.VertexDeclarationRHI = GetVertexDeclarationFVector4();
+				GraphicsPSOInit.BoundShaderState.VertexShaderRHI = VertexShader.GetVertexShader();
+				GraphicsPSOInit.BoundShaderState.PixelShaderRHI = PixelShader.GetPixelShader();
+				GraphicsPSOInit.PrimitiveType = PT_TriangleStrip;
+		
+				SetGraphicsPipelineState(RHICmdList, GraphicsPSOInit, 0);
+				
+				SetShaderParameters(RHICmdList,VertexShader,VertexShader.GetVertexShader(),*RenderParameters);
+				SetShaderParameters(RHICmdList,PixelShader,PixelShader.GetPixelShader(),*RenderParameters);
+		
+				RHICmdList.SetStreamSource(0, GClearVertexBuffer.VertexBufferRHI, 0);
+				RHICmdList.DrawPrimitive(0, 2, NumGS);
+			});
+	}
 }
 
-FUEGSRenderData::FUEGSRenderData(FRDGBuilder& GraphBuilder, const FViewInfo& view, const FIntRect& viewportSubset, UGSAsset* GSAssetData)
-	:F_EGP_ViewPersistentData(GraphBuilder,view,viewportSubset)
+FUEGSRenderData::FUEGSRenderData(FRDGBuilder&GraphBuilder,
+		const FViewInfo& ViewInfo,
+		const FIntRect& ViewportSubset, 
+		GSResource resource)
+	:F_EGP_ViewPersistentData(GraphBuilder,ViewInfo,ViewportSubset)
 {
-	this->NumGS = GSAssetData->NumGS;
+	this->NumGS = (resource.Asset)->NumGS;
+	this->OpacityScale = resource.OpacityScale;
+	this->SplatScale = resource.SplatScale;
+	this->Scale = resource.Scale;
+	this->SH = resource.SH;
+	this->WorldTransform = resource.WorldTransform;
+	
 	// Create preprocess data buffer, upload gs data from cpu side
 	{
 		FRHIResourceCreateInfo PreprocessDataBufferCreateInfo(TEXT("GS Preprocess Buffer"));
 		const int BufferStride = sizeof(FVector4f);
-		const int BufferNum = GSAssetData->NumGS * (sizeof(FGSPoint) / sizeof(FVector4f));
+		const int BufferNum = this->NumGS * (sizeof(FGSPoint) / sizeof(FVector4f));
 		PreprocessDataBuffer = FRHICommandListImmediate::Get().CreateBuffer(
 			BufferStride * BufferNum,
 			BUF_Static | BUF_ShaderResource | BUF_StructuredBuffer,
@@ -262,7 +324,7 @@ FUEGSRenderData::FUEGSRenderData(FRDGBuilder& GraphBuilder, const FViewInfo& vie
 			0,
 			BufferStride * BufferNum,
 			RLM_WriteOnly);
-		FMemory::Memcpy(Dest, GSAssetData->GetData() , BufferStride * BufferNum);
+		FMemory::Memcpy(Dest, (resource.Asset)->GetData() , BufferStride * BufferNum);
 		FRHICommandListImmediate::Get().UnlockBuffer(PreprocessDataBuffer);
 		
 		FRDGBufferDesc preprocessDesc = FRDGBufferDesc::CreateBufferDesc(sizeof(FVector4f), NumGS *  (sizeof(FGSPoint) / sizeof(FVector4f)));
@@ -277,7 +339,7 @@ FUEGSRenderData::FUEGSRenderData(FRDGBuilder& GraphBuilder, const FViewInfo& vie
 	{
 		FRHIResourceCreateInfo VertexAttributeBufferCreateInfo(TEXT("GS Vertex Attribute Buffer"));
 		const int BufferStride = sizeof(FVector4f);
-		const int BufferNum = GSAssetData->NumGS * (sizeof(FVertexAttribute) / sizeof(FVector4f));
+		const int BufferNum = this->NumGS * (sizeof(FVertexAttribute) / sizeof(FVector4f));
 		VertexAttributeBuffer = FRHICommandListImmediate::Get().CreateBuffer(
 			BufferStride * BufferNum,
 			BUF_UnorderedAccess | BUF_ShaderResource | BUF_StructuredBuffer,
@@ -296,7 +358,7 @@ FUEGSRenderData::FUEGSRenderData(FRDGBuilder& GraphBuilder, const FViewInfo& vie
 	{
 		FRHIResourceCreateInfo DepthKeyBufferCreateInfo(TEXT("GS Depth Key Buffer Ping"));
 		const int BufferStride = sizeof(uint32);
-		const int BufferNum = GSAssetData->NumGS;
+		const int BufferNum = this->NumGS;
 		DepthKeyBufferPing = FRHICommandListImmediate::Get().CreateBuffer(
 			BufferStride * BufferNum,
 			BUF_UnorderedAccess | BUF_ShaderResource,
@@ -315,7 +377,7 @@ FUEGSRenderData::FUEGSRenderData(FRDGBuilder& GraphBuilder, const FViewInfo& vie
 	{
 		FRHIResourceCreateInfo DepthKeyBufferCreateInfo(TEXT("GS Depth Key Buffer Pong"));
 		const int BufferStride = sizeof(uint32);
-		const int BufferNum = GSAssetData->NumGS;
+		const int BufferNum = this->NumGS;
 		DepthKeyBufferPong = FRHICommandListImmediate::Get().CreateBuffer(
 			BufferStride * BufferNum,
 			BUF_UnorderedAccess | BUF_ShaderResource,
@@ -329,14 +391,12 @@ FUEGSRenderData::FUEGSRenderData(FRDGBuilder& GraphBuilder, const FViewInfo& vie
 			depthKeyPongDesc,
 			NumGS,
 			TEXT("Depth Key Buffer Pong RDG"));
-		
-	
 	}
 	
 	{
 		FRHIResourceCreateInfo IndexValueBufferCreateInfo(TEXT("GS Index Value Buffer Ping"));
 		const int BufferStride = sizeof(uint32);
-		const int BufferNum = GSAssetData->NumGS;
+		const int BufferNum = this->NumGS;
 		IndexValueBufferPing = FRHICommandListImmediate::Get().CreateBuffer(
 			BufferStride * BufferNum,
 			BUF_UnorderedAccess | BUF_ShaderResource,
@@ -355,7 +415,7 @@ FUEGSRenderData::FUEGSRenderData(FRDGBuilder& GraphBuilder, const FViewInfo& vie
 	{
 		FRHIResourceCreateInfo IndexValueBufferCreateInfo(TEXT("GS Index Value Buffer Pong"));
 		const int BufferStride = sizeof(uint32);
-		const int BufferNum = GSAssetData->NumGS;
+		const int BufferNum = this->NumGS;
 		IndexValueBufferPong = FRHICommandListImmediate::Get().CreateBuffer(
 			BufferStride * BufferNum,
 			BUF_UnorderedAccess | BUF_ShaderResource,

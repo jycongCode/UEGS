@@ -96,10 +96,38 @@ U_EGP_RenderPassComponent::U_EGP_RenderPassComponent()
 {
 	PrimaryComponentTick.bCanEverTick = true;
 }
-void U_EGP_RenderPassComponent::BeginPlay()
-{
-	Super::BeginPlay();
 
+// void U_EGP_RenderPassComponent::BeginPlay()
+// {
+// 	Super::BeginPlay();
+//
+// 	auto* world = GetWorld();
+// 	auto* subsystem = (IsValid(world)) ? world->GetSubsystem<U_EGP_RenderPassSubsystem>() : nullptr;
+// 	auto* pass = IsValid(subsystem) ? subsystem->GetPass(GetPassType(), true) : nullptr;
+// 	if (IsValid(pass))
+// 		pass->RegisterPassComponent(this);
+// 	else
+// 		UE_LOG(LogEGP, Error,
+// 			   TEXT("%s component created but there's no world/subsystem for custom render passes! No custom rendering can happen"),
+// 			   *GetName());
+// }
+//
+// void U_EGP_RenderPassComponent::EndPlay(const EEndPlayReason::Type reason)
+// {
+// 	auto* world = GetWorld();
+// 	auto* subsystem = (IsValid(world)) ? world->GetSubsystem<U_EGP_RenderPassSubsystem>() : nullptr;
+// 	auto* pass = IsValid(subsystem) ? subsystem->GetPass(GetPassType(), true) : nullptr;
+// 	if (IsValid(pass))
+// 		pass->UnregisterPassComponent(this);
+// 	
+// 	DestructProxyData_GameThread();
+// 	
+// 	Super::EndPlay(reason);
+// }
+
+void U_EGP_RenderPassComponent::OnRegister()
+{
+	Super::OnRegister();
 	auto* world = GetWorld();
 	auto* subsystem = (IsValid(world)) ? world->GetSubsystem<U_EGP_RenderPassSubsystem>() : nullptr;
 	auto* pass = IsValid(subsystem) ? subsystem->GetPass(GetPassType(), true) : nullptr;
@@ -110,7 +138,8 @@ void U_EGP_RenderPassComponent::BeginPlay()
 			   TEXT("%s component created but there's no world/subsystem for custom render passes! No custom rendering can happen"),
 			   *GetName());
 }
-void U_EGP_RenderPassComponent::EndPlay(const EEndPlayReason::Type reason)
+
+void U_EGP_RenderPassComponent::OnUnregister()
 {
 	auto* world = GetWorld();
 	auto* subsystem = (IsValid(world)) ? world->GetSubsystem<U_EGP_RenderPassSubsystem>() : nullptr;
@@ -120,8 +149,9 @@ void U_EGP_RenderPassComponent::EndPlay(const EEndPlayReason::Type reason)
 	
 	DestructProxyData_GameThread();
 	
-	Super::EndPlay(reason);
+	Super::OnUnregister();
 }
+
 void U_EGP_RenderPassComponent::TickComponent(float deltaSeconds, ELevelTick, FActorComponentTickFunction*)
 {
 	//Update the render-thread references.

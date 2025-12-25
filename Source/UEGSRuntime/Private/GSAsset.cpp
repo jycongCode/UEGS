@@ -38,7 +38,7 @@ static FQuat4f PackSmallest3Rotation(FVector4f q)
 	return FQuat4f(three.X,three.Y,three.Z, index / 3.0f);
 }
 
-bool UGSAsset::LoadFromFile(FString FilePath, FString TargetAssetName)
+bool FGSAsset::LoadFromFile(FString FilePath)
 {
 	std::ifstream IStream(TCHAR_TO_UTF8(*FilePath), std::ios::binary);
 	if (!IStream.is_open()) {
@@ -224,7 +224,6 @@ bool UGSAsset::LoadFromFile(FString FilePath, FString TargetAssetName)
 	}
 	NumGS = numPoints;
 	MaxSHDegree = FMath::Min(sqrt((shIdx.size() / 3 + 1)) - 1,3);
-	this->AssetName = TargetAssetName;
 	return true;
 }
 
