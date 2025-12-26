@@ -31,6 +31,10 @@ struct FGSPreprocessCS : FGlobalShader
 		SHADER_PARAMETER(FMatrix44f, ViewMatrix)
 		SHADER_PARAMETER(FMatrix44f,ViewProjectionMatrix)
 		SHADER_PARAMETER(int, NumGS)
+		SHADER_PARAMETER(int, SH)
+		SHADER_PARAMETER(float,SplatScale)
+		SHADER_PARAMETER(float, OpacityScale)
+		SHADER_PARAMETER(FVector3f,Scale)
 	END_SHADER_PARAMETER_STRUCT()
 };
 IMPLEMENT_GLOBAL_SHADER(FGSPreprocessCS,"/UEGS/GSPreprocess.usf","Main",SF_Compute);
@@ -100,28 +104,16 @@ void U_UEGS_RenderPass::RegisterPassComponent(U_EGP_RenderPassComponent* Compone
 	Super::RegisterPassComponent(Component);
 	auto* TargetComponent = Cast<U_UEGS_Component>(Component);
 	check(TargetComponent != nullptr);
-	FString TargetName;
-	IPlatformFile&PlatformFile = FPlatformFileManager::Get().GetPlatformFile();
-	if (PlatformFile.FileExists(*TargetComponent->GSFilePath))
-	{
-		FGSAsset* NewAsset = new FGSAsset;
-		if (!NewAsset->LoadFromFile(*TargetComponent->GSFilePath))
-		{
-		}else
-		{
-			TargetAsset = NewAsset;
-			TargetName = FPaths::GetBaseFilename(*TargetComponent->GSFilePath);
-		}
-	}
-	if (TargetAsset)
+	if (auto*TargetAsset = TargetComponent->GetAsset())
 	{
 		int SH = TargetComponent->SH;
 		float SplatScale = TargetComponent->SplatScale;
 		float OpacityScale = TargetComponent->OpacityScale;
-		FMatrix44f WorldTransform = FMatrix44f(TargetComponent->GetComponentTransform().ToMatrixNoScale());
-		FVector3f Scale = FVector3f(TargetComponent->GetComponentScale());
+		FMatrix44f WorldTransform = FMatrix44f(TargetComponent->GetComponentTransform().ToMatrixWithScale());
+		FVector3f Scale = FVector3f(TargetComponent->GetComponentTransform().GetScale3D());
 		SplatAssets.Add(TargetComponent->Name,{TargetAsset,SH,WorldTransform,Scale,SplatScale,OpacityScale});
 		SplatData.Add(TargetComponent->Name,T_EGP_PerViewData<FUEGSRenderData>());
+		TargetComponent->TargetPass = this;
 	}
 }
 
@@ -170,10 +162,14 @@ void F_UEGS_PassSVE::PrePostProcessPass_RenderThread(FRDGBuilder& GraphBuilder, 
 		
 		PreprocessParams->View = InView.ViewUniformBuffer;
 		// GS model is placed at world origin by default
-		PreprocessParams->WorldMatrix = FMatrix44f(FTransform::Identity.ToMatrixWithScale());
+		PreprocessParams->WorldMatrix = Resource.WorldTransform;
 		PreprocessParams->ViewMatrix = FMatrix44f(view.ViewMatrices.GetViewMatrix());
 		PreprocessParams->ViewProjectionMatrix = FMatrix44f(view.ViewMatrices.GetViewProjectionMatrix());
 		PreprocessParams->NumGS = simData.NumGS;
+		PreprocessParams->SH = simData.SH;
+		PreprocessParams->SplatScale = simData.SplatScale;
+		PreprocessParams->OpacityScale = simData.OpacityScale;
+		PreprocessParams->Scale = simData.Scale;
 		TShaderMapRef<FGSPreprocessCS> PreprocessShader(view.ShaderMap);
 		
 		FIntVector GroupCount((simData.NumGS + 255)%256,1,1);
@@ -234,6 +230,7 @@ void F_UEGS_PassSVE::PrePostProcessPass_RenderThread(FRDGBuilder& GraphBuilder, 
 		RenderParameters->IndexValueBuffer = GraphBuilder.CreateSRV(IndexValuePingRDG,PF_R32_UINT);
 		RenderParameters->View = InView.ViewUniformBuffer;
 		RenderParameters->NumGS = simData.NumGS;
+		
 		RenderParameters->RenderTargets[0] = {
 			Inputs.SceneTextures->GetContents()->SceneColorTexture,
 			ERenderTargetLoadAction::EClear
@@ -430,6 +427,7 @@ FUEGSRenderData::FUEGSRenderData(FRDGBuilder&GraphBuilder,
 			NumGS,
 			TEXT("Index Value Buffer Pong RDG"));
 	}
+	delete(resource.Asset);
 }
 
 

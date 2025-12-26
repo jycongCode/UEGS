@@ -1,6 +1,7 @@
 ﻿#pragma once
 #include "EGP_CustomRenderPasses.h"
 #include "UEGS_Component.generated.h"
+
 UCLASS()
 class U_UEGS_Component : public U_EGP_RenderPassComponent
 {
@@ -28,13 +29,16 @@ public:
 	
 	virtual void BeginPlay() override;
 	
+#if WITH_EDITOR
 	virtual void PostEditChangeProperty(struct FPropertyChangedEvent& PropertyChangedEvent) override;
-	
 	virtual void PreEditChange(FProperty* PropertyAboutToChange) override;
+	virtual void PostEditComponentMove(bool bFinished) override;
+#endif
 	
 	virtual TSubclassOf<U_EGP_RenderPass> GetPassType() const override;
-protected:
-	EGP_PASS_COMPONENT_SIMPLE_PROXY_IMPL(int,0);
 	
-	FGSAsset* Asset  = nullptr;
+	class U_UEGS_RenderPass* TargetPass = nullptr;
+protected:
+	EGP_PASS_COMPONENT_SIMPLE_PROXY_IMPL(int,0)
+	
 };

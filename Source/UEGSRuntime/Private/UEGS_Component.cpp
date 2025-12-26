@@ -5,18 +5,21 @@
 FGSAsset* U_UEGS_Component::GetAsset()
 {
 	IPlatformFile&PlatformFile = FPlatformFileManager::Get().GetPlatformFile();
+	FGSAsset* NewAsset = nullptr;
 	if (PlatformFile.FileExists(*GSFilePath))
 	{
-		FGSAsset* NewAsset = new FGSAsset();
-		if (!NewAsset->LoadFromFile(*GSFilePath))
+		NewAsset = new FGSAsset();
+		if (NewAsset->LoadFromFile(*GSFilePath))
 		{
+			Name = FPaths::GetBaseFilename(GSFilePath);
 		}else
 		{
-			Asset = NewAsset;
-			Name = FPaths::GetBaseFilename(GSFilePath);
+			delete(NewAsset);
+			NewAsset = nullptr;
 		}
-	}else return nullptr;
-	return Asset;
+		
+	}
+	return NewAsset;
 }
 
 void U_UEGS_Component::BeginPlay()
@@ -30,6 +33,8 @@ TSubclassOf<U_EGP_RenderPass> U_UEGS_Component::GetPassType() const
 	return U_UEGS_RenderPass::StaticClass();
 }
 
+
+#if WITH_EDITOR
 void U_UEGS_Component::PostEditChangeProperty(struct FPropertyChangedEvent& PropertyChangedEvent)
 {
 	Super::PostEditChangeProperty(PropertyChangedEvent);
@@ -37,40 +42,36 @@ void U_UEGS_Component::PostEditChangeProperty(struct FPropertyChangedEvent& Prop
 	FName PropertyName = (PropertyChangedEvent.Property != nullptr) 
 						 ? PropertyChangedEvent.Property->GetFName() 
 						 : NAME_None;
-
-	// 3. Check if it's the specific property you care about
-	// GET_MEMBER_NAME_CHECKED is safe because it will throw a compile error if you rename the variable later
-	auto* world = GetWorld();
-	auto* subsystem = (IsValid(world)) ? world->GetSubsystem<U_EGP_RenderPassSubsystem>() : nullptr;
-	auto* pass = IsValid(subsystem) ? subsystem->GetPass(GetPassType(), true) : nullptr;
-	if (IsValid(pass))
+	
+	if (TargetPass)
 	{
-		if (PropertyName == GET_MEMBER_NAME_CHECKED(U_UEGS_Component, GSFilePath))
+		if (IsValid(TargetPass))
 		{
-			UE_LOG(LogTemp, Log, TEXT("MyCustomFloat was changed! Updating component..."));
-			pass->RegisterPassComponent(this);
-		}else
-		{
-			U_UEGS_RenderPass* targetPass = Cast<U_UEGS_RenderPass>(pass);
-			check(targetPass != nullptr);
-			if (auto* simResource = targetPass->SplatAssets.Find(Name))
+			if (PropertyName == GET_MEMBER_NAME_CHECKED(U_UEGS_Component, GSFilePath))
 			{
-				simResource->OpacityScale = this->OpacityScale;
-				simResource->SplatScale = this->SplatScale;
-				simResource->SH = this->SH;;
-				simResource->WorldTransform = FMatrix44f(this->GetComponentTransform().ToMatrixNoScale());
-				simResource->Scale = FVector3f(this->GetComponentScale());
-				
+				UE_LOG(LogTemp, Log, TEXT("MyCustomFloat was changed! Updating component..."));
+				ENQUEUE_RENDER_COMMAND(RegisterComp)([pass = TargetPass,this](FRHICommandListImmediate&)
+				{
+					pass->RegisterPassComponent(this);
+				});
+			}else
+			{
+				ENQUEUE_RENDER_COMMAND(UpdateComp)([this,pass=TargetPass](FRHICommandListImmediate&)
+				{
+					U_UEGS_RenderPass* targetPass = Cast<U_UEGS_RenderPass>(pass);
+					check(targetPass != nullptr);
+					if (auto* simResource = targetPass->SplatAssets.Find(this->Name))
+					{
+						simResource->OpacityScale = this->OpacityScale;
+						simResource->SplatScale = this->SplatScale;
+						simResource->SH = this->SH;;
+						simResource->WorldTransform = FMatrix44f(this->GetComponentTransform().ToMatrixWithScale());
+						simResource->Scale = FVector3f(this->GetComponentTransform().GetScale3D());
+					}
+				});
 			}
 		}
-	}else
-	{
-		UE_LOG(LogEGP, Error,
-			   TEXT("%s component created but there's no world/subsystem for custom render passes! No custom rendering can happen"),
-			   *GetName());
 	}
-		
-	
 }
 
 void U_UEGS_Component::PreEditChange(FProperty* PropertyAboutToChange)
@@ -96,3 +97,28 @@ void U_UEGS_Component::PreEditChange(FProperty* PropertyAboutToChange)
 	
 	Super::PreEditChange(PropertyAboutToChange);
 }
+
+void U_UEGS_Component::PostEditComponentMove(bool bFinished)
+{
+	if (TargetPass)
+	{
+		if (IsValid(TargetPass))
+		{
+			ENQUEUE_RENDER_COMMAND(UpdateComp)([this,pass=TargetPass](FRHICommandListImmediate&)
+			{
+				U_UEGS_RenderPass* targetPass = Cast<U_UEGS_RenderPass>(pass);
+				check(targetPass != nullptr);
+				if (auto* simResource = targetPass->SplatAssets.Find(this->Name))
+				{
+					simResource->WorldTransform = FMatrix44f(this->GetComponentTransform().ToMatrixWithScale());
+					FVector3f scale = FVector3f( this->GetComponentTransform().GetScale3D());
+					simResource->Scale = scale;
+				}
+			});
+		}
+	}
+}
+#endif
+
+
+

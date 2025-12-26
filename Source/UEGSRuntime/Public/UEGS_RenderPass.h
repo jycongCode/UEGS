@@ -21,6 +21,7 @@ struct FUEGSRenderData final: public F_EGP_ViewPersistentData
 	// todo : add buffers needed for gpu sorting
 	TRefCountPtr<FRHIBuffer> PreprocessDataBuffer, VertexAttributeBuffer, DepthKeyBufferPing, IndexValueBufferPing, DepthKeyBufferPong,IndexValueBufferPong;
 	TRefCountPtr<FRDGPooledBuffer> PreprocessBufferPooled, VertexAttributeBufferPooled, DepthKeyBufferPingPooled, IndexValueBufferPingPooled, DepthKeyBufferPongPooled,IndexValueBufferPongPooled;
+	
 	int NumGS = 0;
 	int SH = 0;
 	FMatrix44f WorldTransform = FMatrix44f::Identity;
@@ -44,7 +45,6 @@ class U_UEGS_RenderPass : public U_EGP_RenderPass
 public:
 	TMap<FString,T_EGP_PerViewData<FUEGSRenderData>> SplatData;
 	TMap<FString,GSResource> SplatAssets;
-	FGSAsset* TargetAsset = nullptr;
 	
 	virtual void RegisterPassComponent(U_EGP_RenderPassComponent*) override;
 	virtual void UnregisterPassComponent(U_EGP_RenderPassComponent*) override;
