@@ -3,7 +3,6 @@
 
 ## Dependency
 - UE 5.5.4
-- 插件: ExtendedGraphicsProgramming : https://github.com/heyx3/ExtendedGraphicsProgramming (便于资源管理，后期可以替换掉，详情参考blog：https://medium.com/@manning.w27/advanced-graphics-programming-in-unreal-part-1-10488f2e17dd) 
 - RHI: D3D11
 
 ## Component
